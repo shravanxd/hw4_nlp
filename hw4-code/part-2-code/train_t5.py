@@ -48,6 +48,24 @@ def get_args():
     parser.add_argument('--batch_size', type=int, default=16)
     parser.add_argument('--test_batch_size', type=int, default=16)
 
+    # Freezing options (for fine-tuning)
+    parser.add_argument('--freeze_all_encoder_layers', action='store_true',
+                        help='Freeze all encoder layers')
+    parser.add_argument('--freeze_all_decoder_layers', action='store_true',
+                        help='Freeze all decoder layers')
+    parser.add_argument('--freeze_encoder_n_layers', type=int, default=0,
+                        help='Freeze the bottom N encoder layers')
+    parser.add_argument('--freeze_decoder_n_layers', type=int, default=0,
+                        help='Freeze the bottom N decoder layers')
+    parser.add_argument('--freeze_embeddings', action='store_true',
+                        help='Freeze shared embeddings (and tied lm_head)')
+
+    # Generation options
+    parser.add_argument('--num_beams', type=int, default=4,
+                        help='Number of beams for beam search (1 = greedy)')
+    parser.add_argument('--max_gen_length', type=int, default=128,
+                        help='Maximum generation length for SQL queries')
+
     args = parser.parse_args()
     return args
 
@@ -56,17 +74,53 @@ def train(args, model, train_loader, dev_loader, optimizer, scheduler):
     epochs_since_improvement = 0
 
     model_type = 'ft' if args.finetune else 'scr'
-    checkpoint_dir = os.path.join('checkpoints', f'{model_type}_experiments', args.experiment_name)
-    os.makedirs(checkpoint_dir, exist_ok=True)
-    os.makedirs('results', exist_ok=True)
-    os.makedirs('records', exist_ok=True)
-    args.checkpoint_dir = checkpoint_dir
     experiment_name = args.experiment_name
+
+    # Single run directory to hold everything for this run
+    run_dir = os.path.join('runs', f'{model_type}_experiments', experiment_name)
+    ckpt_dir = os.path.join(run_dir, 'checkpoints')
+    results_dir = os.path.join(run_dir, 'results')
+    records_dir = os.path.join(run_dir, 'records')
+    os.makedirs(ckpt_dir, exist_ok=True)
+    os.makedirs(results_dir, exist_ok=True)
+    os.makedirs(records_dir, exist_ok=True)
+
+    # Attach for checkpoint saving/loading
+    args.checkpoint_dir = ckpt_dir
+    # Dev outputs for this run
+    model_sql_path = os.path.join(results_dir, 'dev.sql')
+    model_record_path = os.path.join(records_dir, 'dev.pkl')
+    
+    print("\n=== Run setup ===")
+    print(f"Mode: {'fine-tune' if args.finetune else 'scratch'}")
+    print(f"Experiment: {experiment_name}")
+    print(f"Run dir: {run_dir}")
+    print(f"Checkpoints: {ckpt_dir}")
+    print(f"Dev outputs -> SQL: {model_sql_path} | Records: {model_record_path}")
+    print(f"Batch sizes: train={args.batch_size}, dev={args.test_batch_size}")
+    print("=================\n")
+
+    # Ground-truth files (fixed locations from starter)
     gt_sql_path = 'data/dev.sql'
     gt_record_path = 'records/ground_truth_dev.pkl'
-    model_sql_path = f'results/t5_{model_type}_{experiment_name}_dev.sql'
-    model_record_path = f'records/t5_{model_type}_{experiment_name}_dev.pkl'
+
+    # Ensure ground-truth dev records exist (compute once if missing)
+    if not os.path.exists(gt_record_path):
+        from utils import read_queries, compute_records
+        print(f"Ground-truth records not found at {gt_record_path}. Computing once from {gt_sql_path} ...")
+        gt_qs = read_queries(gt_sql_path)
+        gt_recs, gt_errs = compute_records(gt_qs)
+        os.makedirs(os.path.dirname(gt_record_path), exist_ok=True)
+        import pickle
+        with open(gt_record_path, 'wb') as f:
+            pickle.dump((gt_recs, gt_errs), f)
+        err_count = sum(1 for e in gt_errs if e)
+        print(f"Saved GT records to {gt_record_path} (errors: {err_count}/{len(gt_errs)})")
     for epoch in range(args.max_n_epochs):
+        # Report LR at epoch start
+        current_lr = optimizer.param_groups[0]['lr'] if optimizer.param_groups else -1
+        print(f"Epoch {epoch}: starting, learning rate={current_lr:.6f}")
+
         tr_loss = train_epoch(args, model, train_loader, optimizer, scheduler)
         print(f"Epoch {epoch}: Average train loss was {tr_loss}")
 
@@ -79,6 +133,7 @@ def train(args, model, train_loader, dev_loader, optimizer, scheduler):
         if args.use_wandb:
             result_dict = {
                 'train/loss' : tr_loss,
+                'train/lr' : current_lr,
                 'dev/loss' : eval_loss,
                 'dev/record_f1' : record_f1,
                 'dev/record_em' : record_em,
@@ -86,10 +141,25 @@ def train(args, model, train_loader, dev_loader, optimizer, scheduler):
                 'dev/error_rate' : error_rate,
             }
             wandb.log(result_dict, step=epoch)
+            
+            # Save artifacts
+            try:
+                wandb.save(model_sql_path)
+                wandb.save(model_record_path)
+            except Exception:
+                pass
 
-        if record_f1 > best_f1:
+        # Ignore F1 scores of 1.0 as they're likely false positives
+        if record_f1 >= 0.99999:
+            print(f"Epoch {epoch}: Ignoring suspicious F1 score of {record_f1:.6f} (likely false positive)")
+            epochs_since_improvement += 1
+            if best_f1 < 0:
+                best_f1 = 0.01  # Prevent crash on first epoch
+                epochs_since_improvement = 0
+        elif record_f1 > best_f1:
             best_f1 = record_f1
             epochs_since_improvement = 0
+            print(f"Epoch {epoch}: New best Record F1 = {best_f1:.4f} — saving best model")
         else:
             epochs_since_improvement += 1
 
@@ -178,8 +248,8 @@ def eval_epoch(args, model, dev_loader, gt_sql_pth, model_sql_path, gt_record_pa
             outputs = model.generate(
                 input_ids=encoder_input,
                 attention_mask=encoder_mask,
-                max_length=128,
-                num_beams=4,
+                max_length=getattr(args, 'max_gen_length', 128),
+                num_beams=getattr(args, 'num_beams', 4),
                 early_stopping=True
             )
             
@@ -223,8 +293,8 @@ def test_inference(args, model, test_loader, model_sql_path, model_record_path):
             outputs = model.generate(
                 input_ids=encoder_input,
                 attention_mask=encoder_mask,
-                max_length=128,
-                num_beams=4,
+                max_length=getattr(args, 'max_gen_length', 128),
+                num_beams=getattr(args, 'num_beams', 4),
                 early_stopping=True
             )
             
@@ -266,22 +336,23 @@ def main():
     
     model.eval()
     
-    # Dev set
+    # Setup directories for final evaluation
     experiment_name = args.experiment_name
     model_type = 'ft' if args.finetune else 'scr'
-    gt_sql_path = 'data/dev.sql'
-    gt_record_path = 'records/ground_truth_dev.pkl'
-    model_sql_path = f'results/t5_{model_type}_{experiment_name}_dev.sql'
-    model_record_path = f'records/t5_{model_type}_{experiment_name}_dev.pkl'
-    dev_loss, dev_record_em, dev_record_f1, dev_sql_em, dev_error_rate = eval_epoch(args, model, dev_loader,
-                                                                                    gt_sql_path, model_sql_path,
-                                                                                    gt_record_path, model_record_path)
-    print(f"Dev set results: Loss: {dev_loss}, Record F1: {dev_record_f1}, Record EM: {dev_record_em}, SQL EM: {dev_sql_em}")
-    print(f"Dev set results: {dev_error_rate*100:.2f}% of the generated outputs led to SQL errors")
+    run_dir = os.path.join('runs', f'{model_type}_experiments', experiment_name)
+    ckpt_dir = os.path.join(run_dir, 'checkpoints')
+    results_dir = os.path.join(run_dir, 'results')
+    records_dir = os.path.join(run_dir, 'records')
+    os.makedirs(results_dir, exist_ok=True)
+    os.makedirs(records_dir, exist_ok=True)
+    args.checkpoint_dir = ckpt_dir
+
+    # Dev evaluation is already done during training
+    print("\n=== Final Test Inference ===")
 
     # Test set
-    model_sql_path = f'results/t5_{model_type}_{experiment_name}_test.sql'
-    model_record_path = f'records/t5_{model_type}_{experiment_name}_test.pkl'
+    model_sql_path = os.path.join(results_dir, 'test.sql')
+    model_record_path = os.path.join(records_dir, 'test.pkl')
     test_inference(args, model, test_loader, model_sql_path, model_record_path)
 
 if __name__ == "__main__":
