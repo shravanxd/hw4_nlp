@@ -27,16 +27,16 @@ def get_args():
     # Training hyperparameters
     parser.add_argument('--optimizer_type', type=str, default="AdamW", choices=["AdamW"],
                         help="What optimizer to use")
-    parser.add_argument('--learning_rate', type=float, default=1e-1)
-    parser.add_argument('--weight_decay', type=float, default=0)
+    parser.add_argument('--learning_rate', type=float, default=5e-5)
+    parser.add_argument('--weight_decay', type=float, default=0.01)
 
     parser.add_argument('--scheduler_type', type=str, default="cosine", choices=["none", "cosine", "linear"],
                         help="Whether to use a LR scheduler and what type to use if so")
-    parser.add_argument('--num_warmup_epochs', type=int, default=0,
+    parser.add_argument('--num_warmup_epochs', type=int, default=1,
                         help="How many epochs to warm up the learning rate for if using a scheduler")
-    parser.add_argument('--max_n_epochs', type=int, default=0,
+    parser.add_argument('--max_n_epochs', type=int, default=10,
                         help="How many epochs to train the model for")
-    parser.add_argument('--patience_epochs', type=int, default=0,
+    parser.add_argument('--patience_epochs', type=int, default=3,
                         help="If validation performance stops improving, how many epochs should we wait before stopping?")
 
     parser.add_argument('--use_wandb', action='store_true',
@@ -238,6 +238,15 @@ def test_inference(args, model, test_loader, model_sql_path, model_record_path):
 def main():
     # Get key arguments
     args = get_args()
+    
+    # Validate arguments
+    if args.max_n_epochs == 0:
+        print("Warning: max_n_epochs is 0. No training will be performed.")
+        print("Set --max_n_epochs to a positive value (e.g., 10) to train the model.")
+        print("\nExample usage:")
+        print("python train_t5.py --finetune --max_n_epochs 10 --experiment_name my_experiment")
+        return
+    
     if args.use_wandb:
         # Recommended: Using wandb (or tensorboard) for result logging can make experimentation easier
         setup_wandb(args)
@@ -248,10 +257,11 @@ def main():
     optimizer, scheduler = initialize_optimizer_and_scheduler(args, model, len(train_loader))
 
     # Train 
-    train(args, model, train_loader, dev_loader, optimizer, scheduler)
-
-    # Evaluate
-    model = load_model_from_checkpoint(args, best=True)
+    if args.max_n_epochs > 0:
+        train(args, model, train_loader, dev_loader, optimizer, scheduler)
+        # Evaluate - load best checkpoint after training
+        model = load_model_from_checkpoint(args, best=True)
+    
     model.eval()
     
     # Dev set
