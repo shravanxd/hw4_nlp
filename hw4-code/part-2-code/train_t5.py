@@ -163,9 +163,9 @@ def train(args, model, train_loader, dev_loader, optimizer, scheduler):
         else:
             epochs_since_improvement += 1
 
-        save_model(checkpoint_dir, model, best=False)
+        save_model(args.checkpoint_dir, model, best=False)
         if epochs_since_improvement == 0:
-            save_model(checkpoint_dir, model, best=True)
+            save_model(args.checkpoint_dir, model, best=True)
 
         if epochs_since_improvement >= args.patience_epochs:
             break
