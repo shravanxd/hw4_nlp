@@ -26,16 +26,57 @@ class T5Dataset(Dataset):
               T5Tokenizer should serve that purpose.
             * Class behavior should be different on the test set.
         '''
-        # TODO
+        self.split = split
+        self.tokenizer = T5TokenizerFast.from_pretrained('google-t5/t5-small')
+        self.encoder_inputs, self.decoder_inputs, self.decoder_targets = self.process_data(data_folder, split, self.tokenizer)
 
     def process_data(self, data_folder, split, tokenizer):
-        # TODO
+        # Load natural language queries
+        nl_path = os.path.join(data_folder, f'{split}.nl')
+        nl_queries = load_lines(nl_path)
+        
+        # Tokenize encoder inputs (natural language queries)
+        encoder_inputs = []
+        for query in nl_queries:
+            # Add prefix for text-to-SQL task
+            input_text = f"translate English to SQL: {query}"
+            encoded = tokenizer(input_text, return_tensors='pt', add_special_tokens=True)
+            encoder_inputs.append(encoded['input_ids'].squeeze(0))
+        
+        # For test set, we don't have SQL targets
+        if split == 'test':
+            return encoder_inputs, None, None
+        
+        # Load SQL queries for train/dev
+        sql_path = os.path.join(data_folder, f'{split}.sql')
+        sql_queries = load_lines(sql_path)
+        
+        # Tokenize decoder inputs and targets
+        decoder_inputs = []
+        decoder_targets = []
+        
+        for sql in sql_queries:
+            # Tokenize the SQL query
+            encoded = tokenizer(sql, return_tensors='pt', add_special_tokens=True)
+            tokens = encoded['input_ids'].squeeze(0)
+            
+            # Decoder input: start with pad token (T5 uses pad as decoder start)
+            decoder_input = tokens[:-1]  # All tokens except last
+            decoder_target = tokens[1:]   # All tokens except first (shifted by 1)
+            
+            decoder_inputs.append(decoder_input)
+            decoder_targets.append(decoder_target)
+        
+        return encoder_inputs, decoder_inputs, decoder_targets
     
     def __len__(self):
-        # TODO
+        return len(self.encoder_inputs)
 
     def __getitem__(self, idx):
-        # TODO
+        if self.split == 'test':
+            return self.encoder_inputs[idx]
+        else:
+            return self.encoder_inputs[idx], self.decoder_inputs[idx], self.decoder_targets[idx]
 
 def normal_collate_fn(batch):
     '''
@@ -53,8 +94,20 @@ def normal_collate_fn(batch):
         * decoder_targets: The target tokens with which to train the decoder (the tokens following each decoder input)
         * initial_decoder_inputs: The very first input token to be decoder (only to be used in evaluation)
     '''
-    # TODO
-    return [], [], [], [], []
+    encoder_inputs, decoder_inputs, decoder_targets = zip(*batch)
+    
+    # Pad encoder inputs
+    encoder_ids = pad_sequence(encoder_inputs, batch_first=True, padding_value=PAD_IDX)
+    encoder_mask = (encoder_ids != PAD_IDX).long()
+    
+    # Pad decoder inputs and targets
+    decoder_inputs_padded = pad_sequence(decoder_inputs, batch_first=True, padding_value=PAD_IDX)
+    decoder_targets_padded = pad_sequence(decoder_targets, batch_first=True, padding_value=PAD_IDX)
+    
+    # Initial decoder input (just the first token, typically PAD_IDX for T5)
+    initial_decoder_inputs = torch.full((len(batch), 1), PAD_IDX, dtype=torch.long)
+    
+    return encoder_ids, encoder_mask, decoder_inputs_padded, decoder_targets_padded, initial_decoder_inputs
 
 def test_collate_fn(batch):
     '''
@@ -69,8 +122,16 @@ def test_collate_fn(batch):
         * encoder_mask: Mask of shape BxT associated with padding tokens in the encoder input
         * initial_decoder_inputs: The very first input token to be decoder (only to be used in evaluation)
     '''
-    # TODO
-    return [], [], []
+    encoder_inputs = batch
+    
+    # Pad encoder inputs
+    encoder_ids = pad_sequence(encoder_inputs, batch_first=True, padding_value=PAD_IDX)
+    encoder_mask = (encoder_ids != PAD_IDX).long()
+    
+    # Initial decoder input (PAD_IDX for T5)
+    initial_decoder_inputs = torch.full((len(batch), 1), PAD_IDX, dtype=torch.long)
+    
+    return encoder_ids, encoder_mask, initial_decoder_inputs
 
 def get_dataloader(batch_size, split):
     data_folder = 'data'

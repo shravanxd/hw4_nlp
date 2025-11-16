@@ -141,16 +141,99 @@ def eval_epoch(args, model, dev_loader, gt_sql_pth, model_sql_path, gt_record_pa
     should both provide good results. If you find that this component of evaluation takes too long with your compute,
     we found the cross-entropy loss (in the evaluation set) to be well (albeit imperfectly) correlated with F1 performance.
     '''
-    # TODO
     model.eval()
-    return 0, 0, 0, 0, 0
+    total_loss = 0
+    total_tokens = 0
+    criterion = nn.CrossEntropyLoss()
+    
+    generated_queries = []
+    
+    from transformers import T5TokenizerFast
+    tokenizer = T5TokenizerFast.from_pretrained('google-t5/t5-small')
+    
+    with torch.no_grad():
+        for encoder_input, encoder_mask, decoder_input, decoder_targets, initial_decoder_input in tqdm(dev_loader):
+            encoder_input = encoder_input.to(DEVICE)
+            encoder_mask = encoder_mask.to(DEVICE)
+            decoder_input = decoder_input.to(DEVICE)
+            decoder_targets = decoder_targets.to(DEVICE)
+            
+            # Compute loss
+            logits = model(
+                input_ids=encoder_input,
+                attention_mask=encoder_mask,
+                decoder_input_ids=decoder_input,
+            )['logits']
+            
+            non_pad = decoder_targets != PAD_IDX
+            loss = criterion(logits[non_pad], decoder_targets[non_pad])
+            
+            num_tokens = torch.sum(non_pad).item()
+            total_loss += loss.item() * num_tokens
+            total_tokens += num_tokens
+            
+            # Generate predictions
+            outputs = model.generate(
+                input_ids=encoder_input,
+                attention_mask=encoder_mask,
+                max_length=128,
+                num_beams=4,
+                early_stopping=True
+            )
+            
+            # Decode generated outputs
+            for output in outputs:
+                decoded = tokenizer.decode(output, skip_special_tokens=True)
+                generated_queries.append(decoded)
+    
+    avg_loss = total_loss / total_tokens
+    
+    # Save generated queries and compute metrics
+    save_queries_and_records(generated_queries, model_sql_path, model_record_path)
+    
+    sql_em, record_em, record_f1, error_msgs = compute_metrics(
+        gt_sql_pth, model_sql_path, gt_record_path, model_record_path
+    )
+    
+    # Calculate error rate
+    error_count = sum(1 for msg in error_msgs if msg != "")
+    error_rate = error_count / len(error_msgs) if len(error_msgs) > 0 else 0
+    
+    return avg_loss, record_f1, record_em, sql_em, error_rate
         
 def test_inference(args, model, test_loader, model_sql_path, model_record_path):
     '''
     You must implement inference to compute your model's generated SQL queries and its associated 
     database records. Implementation should be very similar to eval_epoch.
     '''
-    pass
+    model.eval()
+    generated_queries = []
+    
+    from transformers import T5TokenizerFast
+    tokenizer = T5TokenizerFast.from_pretrained('google-t5/t5-small')
+    
+    with torch.no_grad():
+        for encoder_input, encoder_mask, initial_decoder_input in tqdm(test_loader):
+            encoder_input = encoder_input.to(DEVICE)
+            encoder_mask = encoder_mask.to(DEVICE)
+            
+            # Generate predictions
+            outputs = model.generate(
+                input_ids=encoder_input,
+                attention_mask=encoder_mask,
+                max_length=128,
+                num_beams=4,
+                early_stopping=True
+            )
+            
+            # Decode generated outputs
+            for output in outputs:
+                decoded = tokenizer.decode(output, skip_special_tokens=True)
+                generated_queries.append(decoded)
+    
+    # Save generated queries and compute records
+    save_queries_and_records(generated_queries, model_sql_path, model_record_path)
+    print(f"Saved test predictions to {model_sql_path} and {model_record_path}")
 
 def main():
     # Get key arguments
