@@ -64,9 +64,9 @@ def get_args():
                         help='Freeze shared embeddings (and tied lm_head)')
 
     # Generation options
-    parser.add_argument('--num_beams', type=int, default=4,
+    parser.add_argument('--num_beams', type=int, default=1,
                         help='Number of beams for beam search (1 = greedy)')
-    parser.add_argument('--max_gen_length', type=int, default=128,
+    parser.add_argument('--max_gen_length', type=int, default=512,
                         help='Maximum generation length for SQL queries')
     
     # Data enhancement
