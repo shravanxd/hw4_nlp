@@ -34,10 +34,13 @@ def get_args():
                         help="Whether to use a LR scheduler and what type to use if so")
     parser.add_argument('--num_warmup_epochs', type=int, default=1,
                         help="How many epochs to warm up the learning rate for if using a scheduler")
-    parser.add_argument('--max_n_epochs', type=int, default=10,
+    parser.add_argument('--max_n_epochs', type=int, default=50,
                         help="How many epochs to train the model for")
-    parser.add_argument('--patience_epochs', type=int, default=3,
+    parser.add_argument('--patience_epochs', type=int, default=10,
                         help="If validation performance stops improving, how many epochs should we wait before stopping?")
+    
+    parser.add_argument('--eval_every_n_epochs', type=int, default=5,
+                        help="Evaluate on dev set every N epochs (default: 5)")
 
     parser.add_argument('--use_wandb', action='store_true',
                         help="If set, we will use wandb to keep track of experiments")
@@ -151,75 +154,97 @@ def train(args, model, train_loader, dev_loader, optimizer, scheduler):
         tr_loss = train_epoch(args, model, train_loader, optimizer, scheduler)
         print(f"Epoch {epoch}: Average train loss was {tr_loss}")
 
-        eval_loss, record_f1, record_em, sql_em, error_rate = eval_epoch(args, model, dev_loader,
-                                                                         gt_sql_path, model_sql_path,
-                                                                         gt_record_path, model_record_path)
+        # Evaluate based on user-specified frequency (or on the last epoch)
+        should_evaluate = (epoch % args.eval_every_n_epochs == 0) or (epoch == args.max_n_epochs - 1)
         
-        # Load GT statistics for comparison
-        import pickle
-        with open(gt_record_path, 'rb') as f:
-            gt_recs, gt_errs = pickle.load(f)
-        gt_err_count = sum(1 for e in gt_errs if e)
-        gt_success = len(gt_recs) - gt_err_count
+        if should_evaluate:
+            print(f"Running dev evaluation at epoch {epoch}...")
+            eval_loss, record_f1, record_em, sql_em, error_rate = eval_epoch(args, model, dev_loader,
+                                                                             gt_sql_path, model_sql_path,
+                                                                             gt_record_path, model_record_path)
+        else:
+            print(f"Skipping dev evaluation at epoch {epoch} (evaluating every {args.eval_every_n_epochs} epochs)")
+            # Use previous values for non-evaluation epochs
+            eval_loss, record_f1, record_em, sql_em, error_rate = 0.0, best_f1, 0.0, 0.0, 0.0
         
-        # Calculate detailed error statistics for model
-        num_queries = 466  # dev set size
-        num_errors = int(error_rate * num_queries)
-        num_success = num_queries - num_errors
-        
-        print(f"\nEpoch {epoch} Results:")
-        print(f"=" * 70)
-        print(f"Dev loss: {eval_loss:.4f} | Record F1: {record_f1:.4f} | Record EM: {record_em:.4f} | SQL EM: {sql_em:.4f}")
-        print(f"\n📊 Ground Truth SQL Execution:")
-        print(f"   Total queries: {len(gt_recs)}")
-        print(f"   Successfully executed: {gt_success}/{len(gt_recs)}")
-        print(f"   Execution failed: {gt_err_count}/{len(gt_recs)}")
-        print(f"   Ground truth error rate: {100*gt_err_count/len(gt_recs):.1f}%")
-        print(f"\n📊 Model SQL Execution:")
-        print(f"   Total queries generated: {num_queries}")
-        print(f"   Successfully executed: {num_success}/{num_queries}")
-        print(f"   Execution failed: {num_errors}/{num_queries}")
-        print(f"   Model error rate: {error_rate*100:.1f}%")
-        print(f"=" * 70 + "\n")
+        # Load GT statistics for comparison (only when evaluating)
+        if should_evaluate:
+            import pickle
+            with open(gt_record_path, 'rb') as f:
+                gt_recs, gt_errs = pickle.load(f)
+            gt_err_count = sum(1 for e in gt_errs if e)
+            gt_success = len(gt_recs) - gt_err_count
+            
+            # Calculate detailed error statistics for model
+            num_queries = 466  # dev set size
+            num_errors = int(error_rate * num_queries)
+            num_success = num_queries - num_errors
+            
+            print(f"\nEpoch {epoch} Results:")
+            print(f"=" * 70)
+            print(f"Dev loss: {eval_loss:.4f} | Record F1: {record_f1:.4f} | Record EM: {record_em:.4f} | SQL EM: {sql_em:.4f}")
+            print(f"\n📊 Ground Truth SQL Execution:")
+            print(f"   Total queries: {len(gt_recs)}")
+            print(f"   Successfully executed: {gt_success}/{len(gt_recs)}")
+            print(f"   Execution failed: {gt_err_count}/{len(gt_recs)}")
+            print(f"   Ground truth error rate: {100*gt_err_count/len(gt_recs):.1f}%")
+            print(f"\n📊 Model SQL Execution:")
+            print(f"   Total queries generated: {num_queries}")
+            print(f"   Successfully executed: {num_success}/{num_queries}")
+            print(f"   Execution failed: {num_errors}/{num_queries}")
+            print(f"   Model error rate: {error_rate*100:.1f}%")
+            print(f"=" * 70 + "\n")
 
         if args.use_wandb:
             result_dict = {
                 'train/loss' : tr_loss,
                 'train/lr' : current_lr,
-                'dev/loss' : eval_loss,
-                'dev/record_f1' : record_f1,
-                'dev/record_em' : record_em,
-                'dev/sql_em' : sql_em,
-                'dev/error_rate' : error_rate,
             }
+            # Only log dev metrics when we actually evaluated
+            if should_evaluate:
+                result_dict.update({
+                    'dev/loss' : eval_loss,
+                    'dev/record_f1' : record_f1,
+                    'dev/record_em' : record_em,
+                    'dev/sql_em' : sql_em,
+                    'dev/error_rate' : error_rate,
+                })
             wandb.log(result_dict, step=epoch)
             
-            # Save artifacts
-            try:
-                wandb.save(model_sql_path)
-                wandb.save(model_record_path)
-            except Exception:
-                pass
+            # Only save artifacts when we actually evaluated
+            if should_evaluate:
+                try:
+                    wandb.save(model_sql_path)
+                    wandb.save(model_record_path)
+                except Exception:
+                    pass
 
-        # Ignore F1 scores of 1.0 as they're likely false positives
-        if record_f1 >= 0.99999:
-            print(f"Epoch {epoch}: Ignoring suspicious F1 score of {record_f1:.6f} (likely false positive)")
-            epochs_since_improvement += 1
-            if best_f1 < 0:
-                best_f1 = 0.01  # Prevent crash on first epoch
+        # Only update best model when we actually evaluated
+        if should_evaluate:
+            # Ignore F1 scores of 1.0 as they're likely false positives
+            if record_f1 >= 0.99999:
+                print(f"Epoch {epoch}: Ignoring suspicious F1 score of {record_f1:.6f} (likely false positive)")
+                epochs_since_improvement += 1
+                if best_f1 < 0:
+                    best_f1 = 0.01  # Prevent crash on first epoch
+                    epochs_since_improvement = 0
+            elif record_f1 > best_f1:
+                best_f1 = record_f1
                 epochs_since_improvement = 0
-        elif record_f1 > best_f1:
-            best_f1 = record_f1
-            epochs_since_improvement = 0
-            print(f"Epoch {epoch}: New best Record F1 = {best_f1:.4f} — saving best model")
+                print(f"Epoch {epoch}: New best Record F1 = {best_f1:.4f} — saving best model")
+            else:
+                epochs_since_improvement += 1
         else:
-            epochs_since_improvement += 1
+            # Don't count skipped evaluations toward patience
+            pass
 
         save_model(args.checkpoint_dir, model, best=False)
-        if epochs_since_improvement == 0:
+        if should_evaluate and epochs_since_improvement == 0:
             save_model(args.checkpoint_dir, model, best=True)
 
-        if epochs_since_improvement >= args.patience_epochs:
+        # Only check patience when we actually evaluated
+        if should_evaluate and epochs_since_improvement >= args.patience_epochs:
+            print(f"Early stopping: no improvement for {args.patience_epochs} evaluations")
             break
 
 def train_epoch(args, model, train_loader, optimizer, scheduler):
