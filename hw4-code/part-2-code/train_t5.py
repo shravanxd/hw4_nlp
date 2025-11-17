@@ -9,7 +9,7 @@ import wandb
 
 from t5_utils import initialize_model, initialize_optimizer_and_scheduler, save_model, load_model_from_checkpoint, setup_wandb
 from transformers import GenerationConfig
-from load_data import load_t5_data
+from load_data import load_t5_data, extract_sql_before_end
 from utils import compute_metrics, save_queries_and_records
 
 DEVICE = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
@@ -325,15 +325,17 @@ def eval_epoch(args, model, dev_loader, gt_sql_pth, model_sql_path, gt_record_pa
             outputs = model.generate(
                 input_ids=encoder_input,
                 attention_mask=encoder_mask,
-                max_length=getattr(args, 'max_gen_length', 128),
-                num_beams=getattr(args, 'num_beams', 4),
+                max_length=getattr(args, 'max_gen_length', 512),
+                num_beams=1,
                 early_stopping=True
             )
             
-            # Decode generated outputs
+            # Decode generated outputs and extract SQL before END token
             for output in outputs:
                 decoded = tokenizer.decode(output, skip_special_tokens=True)
-                generated_queries.append(decoded)
+                # Extract SQL before END token
+                sql_query = extract_sql_before_end(decoded)
+                generated_queries.append(sql_query)
     
     avg_loss = total_loss / total_tokens
     
@@ -407,10 +409,12 @@ def test_inference(args, model, test_loader, model_sql_path, model_record_path):
                 early_stopping=True
             )
             
-            # Decode generated outputs
+            # Decode generated outputs and extract SQL before END token
             for output in outputs:
                 decoded = tokenizer.decode(output, skip_special_tokens=True)
-                generated_queries.append(decoded)
+                # Extract SQL before END token
+                sql_query = extract_sql_before_end(decoded)
+                generated_queries.append(sql_query)
     
     # Save generated queries and compute records
     save_queries_and_records(generated_queries, model_sql_path, model_record_path)

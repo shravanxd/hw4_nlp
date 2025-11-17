@@ -39,15 +39,26 @@ class T5Dataset(Dataset):
         self.encoder_inputs, self.decoder_inputs, self.decoder_targets = self.process_data(data_folder, split, self.tokenizer)
 
     def _load_schema(self, data_folder):
-        """Load and format database schema information."""
+        """Load and format database schema information from flight_database.schema file."""
+        import json
         schema_path = os.path.join(data_folder, 'flight_database.schema')
         
-        # Simple schema representation (can be customized)
-        schema_info = """
-Tables: flights, airlines, airports, fares
-Columns: flight_id, airline_code, from_airport, to_airport, departure_time, arrival_time, fare_id, fare_basis_code, class_type
-"""
-        return schema_info.strip()
+        # Load the schema JSON file
+        with open(schema_path, 'r') as f:
+            schema_data = json.load(f)
+        
+        # Extract table definitions from "ents" section
+        tables = schema_data.get('ents', {})
+        
+        # Format schema as: Table: table_name (column1, column2, ...) | Table: ...
+        schema_parts = []
+        for table_name, columns in sorted(tables.items()):
+            column_names = sorted(columns.keys())
+            column_str = ', '.join(column_names)
+            schema_parts.append(f"Table: {table_name} ({column_str})")
+        
+        schema_info = ' | '.join(schema_parts)
+        return schema_info
 
     def process_data(self, data_folder, split, tokenizer):
         # Load natural language queries
@@ -80,8 +91,11 @@ Columns: flight_id, airline_code, from_airport, to_airport, departure_time, arri
         decoder_targets = []
         
         for sql in sql_queries:
-            # Tokenize the SQL query
-            encoded = tokenizer(sql, return_tensors='pt', add_special_tokens=True)
+            # Add END token to SQL for training (helps model learn when to stop)
+            sql_with_end = sql + ' END'
+            
+            # Tokenize the SQL query with END
+            encoded = tokenizer(sql_with_end, return_tensors='pt', add_special_tokens=True)
             tokens = encoded['input_ids'].squeeze(0)
             
             # Decoder input: start with pad token (T5 uses pad as decoder start)
@@ -173,6 +187,26 @@ def load_t5_data(batch_size, test_batch_size, use_schema_enhancement=False):
     
     return train_loader, dev_loader, test_loader
 
+
+def extract_sql_before_end(generated_text):
+    """
+    Extract SQL query from generated text by getting everything before END token.
+    If END token is not found, return the full generated text.
+    
+    Args:
+        generated_text: The generated SQL query (potentially with END token)
+    
+    Returns:
+        SQL query with END token and everything after it removed
+    """
+    if 'END' in generated_text:
+        # Split by END and take only the first part
+        sql_query = generated_text.split('END')[0].strip()
+    else:
+        # If no END token, return as is
+        sql_query = generated_text.strip()
+    
+    return sql_query
 
 def load_lines(path):
     with open(path, 'r') as f:
