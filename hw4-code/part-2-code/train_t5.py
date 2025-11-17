@@ -113,13 +113,33 @@ def train(args, model, train_loader, dev_loader, optimizer, scheduler):
         from utils import read_queries, compute_records
         print(f"Ground-truth records not found at {gt_record_path}. Computing once from {gt_sql_path} ...")
         gt_qs = read_queries(gt_sql_path)
+        print(f"Loaded {len(gt_qs)} ground truth SQL queries")
+        print(f"Executing ground truth queries to generate records...")
         gt_recs, gt_errs = compute_records(gt_qs)
         os.makedirs(os.path.dirname(gt_record_path), exist_ok=True)
         import pickle
         with open(gt_record_path, 'wb') as f:
             pickle.dump((gt_recs, gt_errs), f)
         err_count = sum(1 for e in gt_errs if e)
-        print(f"Saved GT records to {gt_record_path} (errors: {err_count}/{len(gt_errs)})")
+        print(f"✅ Ground truth execution complete:")
+        print(f"   Total queries: {len(gt_qs)}")
+        print(f"   Successful: {len(gt_qs) - err_count}")
+        print(f"   Failed: {err_count}")
+        if err_count > 0:
+            print(f"   Error rate: {100*err_count/len(gt_qs):.1f}%")
+        print(f"Saved GT records to {gt_record_path}")
+    else:
+        # Load and report on existing GT records
+        import pickle
+        with open(gt_record_path, 'rb') as f:
+            gt_recs, gt_errs = pickle.load(f)
+        err_count = sum(1 for e in gt_errs if e)
+        print(f"✅ Using existing ground truth records from {gt_record_path}")
+        print(f"   Total queries: {len(gt_recs)}")
+        print(f"   Successful: {len(gt_recs) - err_count}")
+        print(f"   Failed: {err_count}")
+        if err_count > 0:
+            print(f"   Error rate: {100*err_count/len(gt_recs):.1f}%")
     for epoch in range(args.max_n_epochs):
         # Report LR at epoch start
         current_lr = optimizer.param_groups[0]['lr'] if optimizer.param_groups else -1
@@ -131,8 +151,14 @@ def train(args, model, train_loader, dev_loader, optimizer, scheduler):
         eval_loss, record_f1, record_em, sql_em, error_rate = eval_epoch(args, model, dev_loader,
                                                                          gt_sql_path, model_sql_path,
                                                                          gt_record_path, model_record_path)
+        
+        # Calculate detailed error statistics
+        num_queries = 466  # dev set size
+        num_errors = int(error_rate * num_queries)
+        num_success = num_queries - num_errors
+        
         print(f"Epoch {epoch}: Dev loss: {eval_loss}, Record F1: {record_f1}, Record EM: {record_em}, SQL EM: {sql_em}")
-        print(f"Epoch {epoch}: {error_rate*100:.2f}% of the generated outputs led to SQL errors")
+        print(f"Epoch {epoch}: Model SQL execution: {num_success}/{num_queries} successful, {num_errors}/{num_queries} failed ({error_rate*100:.2f}% error rate)")
 
         if args.use_wandb:
             result_dict = {
@@ -275,6 +301,29 @@ def eval_epoch(args, model, dev_loader, gt_sql_pth, model_sql_path, gt_record_pa
     error_count = sum(1 for msg in error_msgs if msg != "")
     error_rate = error_count / len(error_msgs) if len(error_msgs) > 0 else 0
     
+    # Print detailed generation statistics
+    print(f"\n📊 Generation Statistics:")
+    print(f"   Total queries generated: {len(generated_queries)}")
+    print(f"   Successfully executed: {len(error_msgs) - error_count}")
+    print(f"   Execution failed: {error_count}")
+    print(f"   Error rate: {error_rate*100:.1f}%")
+    
+    # Show sample errors if any
+    if error_count > 0 and error_count <= 5:
+        print(f"\n⚠️  Sample errors:")
+        for i, msg in enumerate(error_msgs):
+            if msg != "":
+                print(f"   Query {i}: {generated_queries[i][:100]}...")
+                print(f"   Error: {msg}")
+    elif error_count > 5:
+        print(f"\n⚠️  First 3 sample errors:")
+        shown = 0
+        for i, msg in enumerate(error_msgs):
+            if msg != "" and shown < 3:
+                print(f"   Query {i}: {generated_queries[i][:100]}...")
+                print(f"   Error: {msg}")
+                shown += 1
+
     return avg_loss, record_f1, record_em, sql_em, error_rate
         
 def test_inference(args, model, test_loader, model_sql_path, model_record_path):
