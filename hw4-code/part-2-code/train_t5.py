@@ -346,6 +346,10 @@ def eval_epoch(args, model, dev_loader, gt_sql_pth, model_sql_path, gt_record_pa
         gt_sql_pth, model_sql_path, gt_record_path, model_record_path
     )
     
+    # Load ground truth queries for comparison
+    from utils import read_queries
+    gt_queries = read_queries(gt_sql_pth)
+    
     # Calculate error rate
     error_count = sum(1 for msg in error_msgs if msg != "")
     error_rate = error_count / len(error_msgs) if len(error_msgs) > 0 else 0
@@ -359,6 +363,22 @@ def eval_epoch(args, model, dev_loader, gt_sql_pth, model_sql_path, gt_record_pa
     print(f"Execution failed: {error_count}/{len(error_msgs)}")
     print(f"Model error rate: {error_rate*100:.1f}%")
     print(f"{'='*70}")
+    
+    # Show 5 sample predictions with ground truth comparison
+    print(f"\n{'='*70}")
+    print(f"📝 Sample Predictions vs Ground Truth (5 examples):")
+    print(f"{'='*70}")
+    num_samples = min(5, len(generated_queries))
+    for i in range(num_samples):
+        status = "✅ SUCCESS" if error_msgs[i] == "" else "❌ ERROR"
+        print(f"\n[Example {i+1}] {status}")
+        print(f"Ground Truth:")
+        print(f"  {gt_queries[i]}")
+        print(f"Predicted:")
+        print(f"  {generated_queries[i]}")
+        if error_msgs[i] != "":
+            print(f"Error: {error_msgs[i][:150]}")
+    print(f"\n{'='*70}")
     
     # Show sample errors if any
     if error_count > 0 and error_count <= 5:
