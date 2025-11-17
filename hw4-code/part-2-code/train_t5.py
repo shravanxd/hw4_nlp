@@ -110,14 +110,33 @@ def train(args, model, train_loader, dev_loader, optimizer, scheduler):
     model_sql_path = os.path.join(results_dir, 'dev.sql')
     model_record_path = os.path.join(records_dir, 'dev.pkl')
     
-    print("\n=== Run setup ===")
-    print(f"Mode: {'fine-tune' if args.finetune else 'scratch'}")
-    print(f"Experiment: {experiment_name}")
-    print(f"Run dir: {run_dir}")
-    print(f"Checkpoints: {ckpt_dir}")
-    print(f"Dev outputs -> SQL: {model_sql_path} | Records: {model_record_path}")
-    print(f"Batch sizes: train={args.batch_size}, dev={args.test_batch_size}")
-    print("=================\n")
+    # Create log file for this experiment
+    log_file_path = os.path.join(run_dir, f'{experiment_name}_log.txt')
+    log_file = open(log_file_path, 'w', buffering=1)  # Line buffered
+    
+    def log_print(message):
+        """Print to console and log file simultaneously"""
+        print(message)
+        log_file.write(message + '\n')
+        log_file.flush()
+    
+    log_print("\n=== Run setup ===")
+    log_print(f"Mode: {'fine-tune' if args.finetune else 'scratch'}")
+    log_print(f"Experiment: {experiment_name}")
+    log_print(f"Run dir: {run_dir}")
+    log_print(f"Checkpoints: {ckpt_dir}")
+    log_print(f"Dev outputs -> SQL: {model_sql_path} | Records: {model_record_path}")
+    log_print(f"Log file: {log_file_path}")
+    log_print(f"Batch sizes: train={args.batch_size}, dev={args.test_batch_size}")
+    log_print(f"Learning rate: {args.learning_rate}")
+    log_print(f"Weight decay: {args.weight_decay}")
+    log_print(f"Dropout: {getattr(args, 'dropout', 0.1)}")
+    log_print(f"Label smoothing: {getattr(args, 'label_smoothing', 0.1)}")
+    log_print(f"Scheduler: {args.scheduler_type}")
+    log_print(f"Max epochs: {args.max_n_epochs}")
+    log_print(f"Eval every: {args.eval_every_n_epochs} epochs")
+    log_print(f"Patience: {args.patience_epochs} epochs")
+    log_print("=================\n")
 
     # Ground-truth files (fixed locations from starter)
     gt_sql_path = 'data/dev.sql'
@@ -161,21 +180,21 @@ def train(args, model, train_loader, dev_loader, optimizer, scheduler):
     for epoch in range(args.max_n_epochs):
         # Report LR at epoch start
         current_lr = optimizer.param_groups[0]['lr'] if optimizer.param_groups else -1
-        print(f"Epoch {epoch}: starting, learning rate={current_lr:.6f}")
+        log_print(f"Epoch {epoch}: starting, learning rate={current_lr:.6f}")
 
         tr_loss = train_epoch(args, model, train_loader, optimizer, scheduler)
-        print(f"Epoch {epoch}: Average train loss was {tr_loss}")
+        log_print(f"Epoch {epoch}: Average train loss was {tr_loss}")
 
         # Evaluate based on user-specified frequency (or on the last epoch)
         should_evaluate = (epoch % args.eval_every_n_epochs == 0) or (epoch == args.max_n_epochs - 1)
         
         if should_evaluate:
-            print(f"Running dev evaluation at epoch {epoch}...")
+            log_print(f"Running dev evaluation at epoch {epoch}...")
             eval_loss, record_f1, record_em, sql_em, error_rate = eval_epoch(args, model, dev_loader,
                                                                              gt_sql_path, model_sql_path,
                                                                              gt_record_path, model_record_path)
         else:
-            print(f"Skipping dev evaluation at epoch {epoch} (evaluating every {args.eval_every_n_epochs} epochs)")
+            log_print(f"Skipping dev evaluation at epoch {epoch} (evaluating every {args.eval_every_n_epochs} epochs)")
             # Use previous values for non-evaluation epochs
             eval_loss, record_f1, record_em, sql_em, error_rate = 0.0, best_f1, 0.0, 0.0, 0.0
         
@@ -192,20 +211,20 @@ def train(args, model, train_loader, dev_loader, optimizer, scheduler):
             num_errors = int(error_rate * num_queries)
             num_success = num_queries - num_errors
             
-            print(f"\nEpoch {epoch} Results:")
-            print(f"=" * 70)
-            print(f"Dev loss: {eval_loss:.4f} | Record F1: {record_f1:.4f} | Record EM: {record_em:.4f} | SQL EM: {sql_em:.4f}")
-            print(f"\n📊 Ground Truth SQL Execution:")
-            print(f"   Total queries: {len(gt_recs)}")
-            print(f"   Successfully executed: {gt_success}/{len(gt_recs)}")
-            print(f"   Execution failed: {gt_err_count}/{len(gt_recs)}")
-            print(f"   Ground truth error rate: {100*gt_err_count/len(gt_recs):.1f}%")
-            print(f"\n📊 Model SQL Execution:")
-            print(f"   Total queries generated: {num_queries}")
-            print(f"   Successfully executed: {num_success}/{num_queries}")
-            print(f"   Execution failed: {num_errors}/{num_queries}")
-            print(f"   Model error rate: {error_rate*100:.1f}%")
-            print(f"=" * 70 + "\n")
+            log_print(f"\nEpoch {epoch} Results:")
+            log_print(f"=" * 70)
+            log_print(f"Dev loss: {eval_loss:.4f} | Record F1: {record_f1:.4f} | Record EM: {record_em:.4f} | SQL EM: {sql_em:.4f}")
+            log_print(f"\n📊 Ground Truth SQL Execution:")
+            log_print(f"   Total queries: {len(gt_recs)}")
+            log_print(f"   Successfully executed: {gt_success}/{len(gt_recs)}")
+            log_print(f"   Execution failed: {gt_err_count}/{len(gt_recs)}")
+            log_print(f"   Ground truth error rate: {100*gt_err_count/len(gt_recs):.1f}%")
+            log_print(f"\n📊 Model SQL Execution:")
+            log_print(f"   Total queries generated: {num_queries}")
+            log_print(f"   Successfully executed: {num_success}/{num_queries}")
+            log_print(f"   Execution failed: {num_errors}/{num_queries}")
+            log_print(f"   Model error rate: {error_rate*100:.1f}%")
+            log_print(f"=" * 70 + "\n")
 
         if args.use_wandb:
             result_dict = {
@@ -235,7 +254,7 @@ def train(args, model, train_loader, dev_loader, optimizer, scheduler):
         if should_evaluate:
             # Ignore F1 scores of 1.0 as they're likely false positives
             if record_f1 >= 0.99999:
-                print(f"Epoch {epoch}: Ignoring suspicious F1 score of {record_f1:.6f} (likely false positive)")
+                log_print(f"Epoch {epoch}: Ignoring suspicious F1 score of {record_f1:.6f} (likely false positive)")
                 epochs_since_improvement += 1
                 if best_f1 < 0:
                     best_f1 = 0.01  # Prevent crash on first epoch
@@ -243,7 +262,7 @@ def train(args, model, train_loader, dev_loader, optimizer, scheduler):
             elif record_f1 > best_f1:
                 best_f1 = record_f1
                 epochs_since_improvement = 0
-                print(f"Epoch {epoch}: New best Record F1 = {best_f1:.4f} — saving best model")
+                log_print(f"Epoch {epoch}: New best Record F1 = {best_f1:.4f} — saving best model")
             else:
                 epochs_since_improvement += 1
         else:
@@ -256,8 +275,16 @@ def train(args, model, train_loader, dev_loader, optimizer, scheduler):
 
         # Only check patience when we actually evaluated
         if should_evaluate and epochs_since_improvement >= args.patience_epochs:
-            print(f"Early stopping: no improvement for {args.patience_epochs} evaluations")
+            log_print(f"Early stopping: no improvement for {args.patience_epochs} evaluations")
             break
+    
+    # Close log file at end of training
+    log_print(f"\n{'='*70}")
+    log_print(f"Training completed!")
+    log_print(f"Best F1 score: {best_f1:.4f}")
+    log_print(f"Log saved to: {log_file_path}")
+    log_print(f"{'='*70}\n")
+    log_file.close()
 
 def train_epoch(args, model, train_loader, optimizer, scheduler):
     model.train()
