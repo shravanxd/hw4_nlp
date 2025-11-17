@@ -65,6 +65,10 @@ def get_args():
                         help='Number of beams for beam search (1 = greedy)')
     parser.add_argument('--max_gen_length', type=int, default=128,
                         help='Maximum generation length for SQL queries')
+    
+    # Data enhancement
+    parser.add_argument('--use_schema_enhancement', action='store_true',
+                        help='Use enhanced input format with Question:/Schema:/Answer: pattern')
 
     args = parser.parse_args()
     return args
@@ -324,7 +328,11 @@ def main():
         setup_wandb(args)
 
     # Load the data and the model
-    train_loader, dev_loader, test_loader = load_t5_data(args.batch_size, args.test_batch_size)
+    train_loader, dev_loader, test_loader = load_t5_data(
+        args.batch_size, 
+        args.test_batch_size,
+        use_schema_enhancement=args.use_schema_enhancement
+    )
     model = initialize_model(args)
     optimizer, scheduler = initialize_optimizer_and_scheduler(args, model, len(train_loader))
 

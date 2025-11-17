@@ -15,7 +15,7 @@ PAD_IDX = 0
 
 class T5Dataset(Dataset):
 
-    def __init__(self, data_folder, split):
+    def __init__(self, data_folder, split, use_schema_enhancement=False):
         '''
         Skeleton for the class for performing data processing for the T5 model.
 
@@ -27,8 +27,27 @@ class T5Dataset(Dataset):
             * Class behavior should be different on the test set.
         '''
         self.split = split
+        self.use_schema_enhancement = use_schema_enhancement
         self.tokenizer = T5TokenizerFast.from_pretrained('google-t5/t5-small')
+        
+        # Load schema if using enhancement
+        if use_schema_enhancement:
+            self.schema_text = self._load_schema(data_folder)
+        else:
+            self.schema_text = None
+            
         self.encoder_inputs, self.decoder_inputs, self.decoder_targets = self.process_data(data_folder, split, self.tokenizer)
+
+    def _load_schema(self, data_folder):
+        """Load and format database schema information."""
+        schema_path = os.path.join(data_folder, 'flight_database.schema')
+        
+        # Simple schema representation (can be customized)
+        schema_info = """
+Tables: flights, airlines, airports, fares
+Columns: flight_id, airline_code, from_airport, to_airport, departure_time, arrival_time, fare_id, fare_basis_code, class_type
+"""
+        return schema_info.strip()
 
     def process_data(self, data_folder, split, tokenizer):
         # Load natural language queries
@@ -38,8 +57,13 @@ class T5Dataset(Dataset):
         # Tokenize encoder inputs (natural language queries)
         encoder_inputs = []
         for query in nl_queries:
-            # Add prefix for text-to-SQL task
-            input_text = f"translate English to SQL: {query}"
+            if self.use_schema_enhancement:
+                # Enhanced format: Question: ... Schema: ... Answer:
+                input_text = f"Question: {query} Schema: {self.schema_text} Answer:"
+            else:
+                # Original format
+                input_text = f"translate English to SQL: {query}"
+            
             encoded = tokenizer(input_text, return_tensors='pt', add_special_tokens=True)
             encoder_inputs.append(encoded['input_ids'].squeeze(0))
         
@@ -133,19 +157,19 @@ def test_collate_fn(batch):
     
     return encoder_ids, encoder_mask, initial_decoder_inputs
 
-def get_dataloader(batch_size, split):
+def get_dataloader(batch_size, split, use_schema_enhancement=False):
     data_folder = 'data'
-    dset = T5Dataset(data_folder, split)
+    dset = T5Dataset(data_folder, split, use_schema_enhancement=use_schema_enhancement)
     shuffle = split == "train"
     collate_fn = normal_collate_fn if split != "test" else test_collate_fn
 
     dataloader = DataLoader(dset, batch_size=batch_size, shuffle=shuffle, collate_fn=collate_fn)
     return dataloader
 
-def load_t5_data(batch_size, test_batch_size):
-    train_loader = get_dataloader(batch_size, "train")
-    dev_loader = get_dataloader(test_batch_size, "dev")
-    test_loader = get_dataloader(test_batch_size, "test")
+def load_t5_data(batch_size, test_batch_size, use_schema_enhancement=False):
+    train_loader = get_dataloader(batch_size, "train", use_schema_enhancement)
+    dev_loader = get_dataloader(test_batch_size, "dev", use_schema_enhancement)
+    test_loader = get_dataloader(test_batch_size, "test", use_schema_enhancement)
     
     return train_loader, dev_loader, test_loader
 
