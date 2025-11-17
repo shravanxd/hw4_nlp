@@ -47,11 +47,27 @@ def initialize_model(args):
     if args.finetune:
         print("Initializing T5 model for fine-tuning...")
         model = T5ForConditionalGeneration.from_pretrained('google-t5/t5-small')
+        
+        # Apply dropout if specified (helps prevent overfitting)
+        dropout_rate = getattr(args, 'dropout', 0.1)
+        if dropout_rate > 0:
+            model.config.dropout_rate = dropout_rate
+            # Apply to all dropout layers in the model
+            for module in model.modules():
+                if isinstance(module, torch.nn.Dropout):
+                    module.p = dropout_rate
+            print(f"Applied dropout rate: {dropout_rate}")
+        
         # Apply optional parameter freezing for fine-tuning
         apply_freezing(args, model)
     else:
         print("Initializing T5 model from scratch...")
         config = T5Config.from_pretrained('google-t5/t5-small')
+        # Apply dropout to config for from-scratch training
+        dropout_rate = getattr(args, 'dropout', 0.1)
+        if dropout_rate > 0:
+            config.dropout_rate = dropout_rate
+            print(f"Set config dropout rate: {dropout_rate}")
         model = T5ForConditionalGeneration(config)
     
     model.to(DEVICE)

@@ -28,7 +28,7 @@ def get_args():
     parser.add_argument('--optimizer_type', type=str, default="AdamW", choices=["AdamW"],
                         help="What optimizer to use")
     parser.add_argument('--learning_rate', type=float, default=5e-5)
-    parser.add_argument('--weight_decay', type=float, default=0)
+    parser.add_argument('--weight_decay', type=float, default=0.01)
 
     parser.add_argument('--scheduler_type', type=str, default="cosine", choices=["none", "cosine", "linear"],
                         help="Whether to use a LR scheduler and what type to use if so")
@@ -39,8 +39,14 @@ def get_args():
     parser.add_argument('--patience_epochs', type=int, default=10,
                         help="If validation performance stops improving, how many epochs should we wait before stopping?")
     
-    parser.add_argument('--eval_every_n_epochs', type=int, default=5,
-                        help="Evaluate on dev set every N epochs (default: 5)")
+    parser.add_argument('--eval_every_n_epochs', type=int, default=1,
+                        help="Evaluate on dev set every N epochs (default: 1)")
+    
+    # Regularization
+    parser.add_argument('--dropout', type=float, default=0.1,
+                        help='Dropout rate for model (applied during fine-tuning)')
+    parser.add_argument('--label_smoothing', type=float, default=0.1,
+                        help='Label smoothing for cross entropy loss')
 
     parser.add_argument('--use_wandb', action='store_true',
                         help="If set, we will use wandb to keep track of experiments")
@@ -257,14 +263,11 @@ def train_epoch(args, model, train_loader, optimizer, scheduler):
     model.train()
     total_loss = 0
     total_tokens = 0
-    criterion = nn.CrossEntropyLoss()
-    
-    # For gradient monitoring
-    max_grad_norm_seen = 0.0
-    grad_explosion_count = 0
-    grad_samples = []  # Store gradient norms for periodic reporting
+    # Use label smoothing to prevent overfitting
+    label_smoothing = getattr(args, 'label_smoothing', 0.1)
+    criterion = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
 
-    for batch_idx, (encoder_input, encoder_mask, decoder_input, decoder_targets, _) in enumerate(tqdm(train_loader)):
+    for encoder_input, encoder_mask, decoder_input, decoder_targets, _ in tqdm(train_loader):
         optimizer.zero_grad()
         encoder_input = encoder_input.to(DEVICE)
         encoder_mask = encoder_mask.to(DEVICE)
@@ -280,29 +283,6 @@ def train_epoch(args, model, train_loader, optimizer, scheduler):
         non_pad = decoder_targets != PAD_IDX
         loss = criterion(logits[non_pad], decoder_targets[non_pad])
         loss.backward()
-        
-        # Check gradients before clipping
-        if args.check_gradients or args.max_grad_norm > 0:
-            total_norm = 0.0
-            for p in model.parameters():
-                if p.grad is not None:
-                    param_norm = p.grad.data.norm(2)
-                    total_norm += param_norm.item() ** 2
-            total_norm = total_norm ** 0.5
-            
-            max_grad_norm_seen = max(max_grad_norm_seen, total_norm)
-            grad_samples.append(total_norm)
-            
-            # Check for gradient explosion (>10 is typically concerning)
-            if total_norm > 10.0:
-                grad_explosion_count += 1
-                if args.check_gradients and grad_explosion_count <= 3:
-                    print(f"\n⚠️  Gradient explosion detected at batch {batch_idx}: norm={total_norm:.2f}")
-        
-        # Apply gradient clipping
-        if args.max_grad_norm > 0:
-            torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
-        
         optimizer.step()
         if scheduler is not None: 
             scheduler.step()
@@ -311,19 +291,6 @@ def train_epoch(args, model, train_loader, optimizer, scheduler):
             num_tokens = torch.sum(non_pad).item()
             total_loss += loss.item() * num_tokens
             total_tokens += num_tokens
-    
-    # Report gradient statistics at end of epoch
-    if args.check_gradients and len(grad_samples) > 0:
-        avg_grad_norm = sum(grad_samples) / len(grad_samples)
-        print(f"\n{'='*70}")
-        print(f"📊 Gradient Statistics for this epoch:")
-        print(f"{'='*70}")
-        print(f"Average gradient norm: {avg_grad_norm:.4f}")
-        print(f"Max gradient norm: {max_grad_norm_seen:.4f}")
-        print(f"Gradient explosions (>10): {grad_explosion_count}/{len(grad_samples)} batches")
-        if args.max_grad_norm > 0:
-            print(f"Gradient clipping applied at: {args.max_grad_norm}")
-        print(f"{'='*70}\n")
 
     return total_loss / total_tokens
         
