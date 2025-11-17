@@ -134,12 +134,15 @@ def train(args, model, train_loader, dev_loader, optimizer, scheduler):
         with open(gt_record_path, 'rb') as f:
             gt_recs, gt_errs = pickle.load(f)
         err_count = sum(1 for e in gt_errs if e)
-        print(f"✅ Using existing ground truth records from {gt_record_path}")
+        print(f"\n✅ Ground Truth Statistics:")
         print(f"   Total queries: {len(gt_recs)}")
-        print(f"   Successful: {len(gt_recs) - err_count}")
-        print(f"   Failed: {err_count}")
+        print(f"   Successfully executed: {len(gt_recs) - err_count}")
+        print(f"   Execution failed: {err_count}")
         if err_count > 0:
-            print(f"   Error rate: {100*err_count/len(gt_recs):.1f}%")
+            print(f"   Ground truth error rate: {100*err_count/len(gt_recs):.1f}%")
+        else:
+            print(f"   Ground truth error rate: 0.0%")
+        print()
     for epoch in range(args.max_n_epochs):
         # Report LR at epoch start
         current_lr = optimizer.param_groups[0]['lr'] if optimizer.param_groups else -1
@@ -157,8 +160,15 @@ def train(args, model, train_loader, dev_loader, optimizer, scheduler):
         num_errors = int(error_rate * num_queries)
         num_success = num_queries - num_errors
         
-        print(f"Epoch {epoch}: Dev loss: {eval_loss}, Record F1: {record_f1}, Record EM: {record_em}, SQL EM: {sql_em}")
-        print(f"Epoch {epoch}: Model SQL execution: {num_success}/{num_queries} successful, {num_errors}/{num_queries} failed ({error_rate*100:.2f}% error rate)")
+        print(f"\nEpoch {epoch} Results:")
+        print(f"=" * 70)
+        print(f"Dev loss: {eval_loss:.4f} | Record F1: {record_f1:.4f} | Record EM: {record_em:.4f} | SQL EM: {sql_em:.4f}")
+        print(f"\n📊 Model SQL Execution:")
+        print(f"   Total queries generated: {num_queries}")
+        print(f"   Successfully executed: {num_success}/{num_queries}")
+        print(f"   Execution failed: {num_errors}/{num_queries}")
+        print(f"   Model error rate: {error_rate*100:.1f}%")
+        print(f"=" * 70 + "\n")
 
         if args.use_wandb:
             result_dict = {
@@ -302,27 +312,36 @@ def eval_epoch(args, model, dev_loader, gt_sql_pth, model_sql_path, gt_record_pa
     error_rate = error_count / len(error_msgs) if len(error_msgs) > 0 else 0
     
     # Print detailed generation statistics
-    print(f"\n📊 Generation Statistics:")
-    print(f"   Total queries generated: {len(generated_queries)}")
-    print(f"   Successfully executed: {len(error_msgs) - error_count}")
-    print(f"   Execution failed: {error_count}")
-    print(f"   Error rate: {error_rate*100:.1f}%")
+    print(f"\n{'='*70}")
+    print(f"📊 Generation Statistics for Current Evaluation:")
+    print(f"{'='*70}")
+    print(f"Total queries generated: {len(generated_queries)}")
+    print(f"Successfully executed: {len(error_msgs) - error_count}/{len(error_msgs)}")
+    print(f"Execution failed: {error_count}/{len(error_msgs)}")
+    print(f"Model error rate: {error_rate*100:.1f}%")
+    print(f"{'='*70}")
     
     # Show sample errors if any
     if error_count > 0 and error_count <= 5:
-        print(f"\n⚠️  Sample errors:")
+        print(f"\n⚠️  All {error_count} errors:")
         for i, msg in enumerate(error_msgs):
             if msg != "":
-                print(f"   Query {i}: {generated_queries[i][:100]}...")
-                print(f"   Error: {msg}")
+                print(f"\n   Query {i}:")
+                print(f"   Generated: {generated_queries[i][:120]}...")
+                print(f"   Error: {msg[:100]}")
     elif error_count > 5:
-        print(f"\n⚠️  First 3 sample errors:")
+        print(f"\n⚠️  Sample of first 3 errors (out of {error_count} total):")
         shown = 0
         for i, msg in enumerate(error_msgs):
             if msg != "" and shown < 3:
-                print(f"   Query {i}: {generated_queries[i][:100]}...")
-                print(f"   Error: {msg}")
+                print(f"\n   Query {i}:")
+                print(f"   Generated: {generated_queries[i][:120]}...")
+                print(f"   Error: {msg[:100]}")
                 shown += 1
+    else:
+        print(f"\n✅ All queries executed successfully!")
+    
+    print(f"{'='*70}\n")
 
     return avg_loss, record_f1, record_em, sql_em, error_rate
         
