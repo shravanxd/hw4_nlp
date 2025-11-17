@@ -155,7 +155,14 @@ def train(args, model, train_loader, dev_loader, optimizer, scheduler):
                                                                          gt_sql_path, model_sql_path,
                                                                          gt_record_path, model_record_path)
         
-        # Calculate detailed error statistics
+        # Load GT statistics for comparison
+        import pickle
+        with open(gt_record_path, 'rb') as f:
+            gt_recs, gt_errs = pickle.load(f)
+        gt_err_count = sum(1 for e in gt_errs if e)
+        gt_success = len(gt_recs) - gt_err_count
+        
+        # Calculate detailed error statistics for model
         num_queries = 466  # dev set size
         num_errors = int(error_rate * num_queries)
         num_success = num_queries - num_errors
@@ -163,6 +170,11 @@ def train(args, model, train_loader, dev_loader, optimizer, scheduler):
         print(f"\nEpoch {epoch} Results:")
         print(f"=" * 70)
         print(f"Dev loss: {eval_loss:.4f} | Record F1: {record_f1:.4f} | Record EM: {record_em:.4f} | SQL EM: {sql_em:.4f}")
+        print(f"\n📊 Ground Truth SQL Execution:")
+        print(f"   Total queries: {len(gt_recs)}")
+        print(f"   Successfully executed: {gt_success}/{len(gt_recs)}")
+        print(f"   Execution failed: {gt_err_count}/{len(gt_recs)}")
+        print(f"   Ground truth error rate: {100*gt_err_count/len(gt_recs):.1f}%")
         print(f"\n📊 Model SQL Execution:")
         print(f"   Total queries generated: {num_queries}")
         print(f"   Successfully executed: {num_success}/{num_queries}")
