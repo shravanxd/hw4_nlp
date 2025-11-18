@@ -291,8 +291,7 @@ def train_epoch(args, model, train_loader, optimizer, scheduler):
     total_loss = 0
     total_tokens = 0
     # Use label smoothing to prevent overfitting
-    label_smoothing = getattr(args, 'label_smoothing', 0.1)
-    criterion = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
+    criterion = nn.CrossEntropyLoss()
 
     for encoder_input, encoder_mask, decoder_input, decoder_targets, _ in tqdm(train_loader):
         optimizer.zero_grad()
